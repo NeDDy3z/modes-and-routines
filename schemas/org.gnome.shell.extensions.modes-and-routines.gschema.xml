@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.modes-and-routines" path="/org/gnome/shell/extensions/modes-and-routines/">
+    <key name="modes" type="s">
+      <default>'[]'</default>
+      <summary>Modes as a JSON array</summary>
+    </key>
+    <key name="active" type="s">
+      <default>''</default>
+      <summary>Active mode and its snapshots as JSON, empty when no mode is active</summary>
+    </key>
+    <key name="last-mode" type="s">
+      <default>''</default>
+      <summary>Id of the last started mode</summary>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,8 @@
+{
+  "uuid": "modes-and-routines@erikvanek",
+  "name": "Modes",
+  "description": "Android-like modes in Quick Settings. A mode runs a set of actions (display, audio output, websites, commands) and undoes them when turned off.",
+  "shell-version": ["51"],
+  "settings-schema": "org.gnome.shell.extensions.modes-and-routines",
+  "url": ""
+}
