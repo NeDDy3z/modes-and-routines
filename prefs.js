@@ -1,4 +1,6 @@
 import Adw from 'gi://Adw';
+import Gdk from 'gi://Gdk';
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Gtk from 'gi://Gtk';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
@@ -8,10 +10,43 @@ import {listMonitors, listSinks} from './actions.js';
 const DEFAULT_ICON = 'view-grid-symbolic';
 
 const TYPES = [
-    {id: 'display', label: 'Display'},
-    {id: 'audio', label: 'Audio output'},
-    {id: 'browser', label: 'Open websites'},
-    {id: 'command', label: 'Run command'},
+    {id: 'display', label: 'Display', defaults: {connector: '', layout: 'extend'}},
+    {id: 'audio', label: 'Audio output', defaults: {sink: ''}},
+    {id: 'volume', label: 'Volume', defaults: {volume: 50}},
+    {id: 'browser', label: 'Open websites', defaults: {urls: [], kiosk: false}},
+    {id: 'app', label: 'Open app', defaults: {app: '', off: 'nothing'}, noRestore: true},
+    {id: 'command', label: 'Run command', defaults: {command: '', off: 'command'}, noRestore: true},
+    {id: 'dnd', label: 'Do Not Disturb', defaults: {enabled: true}},
+    {id: 'dark', label: 'Dark or light style', defaults: {style: 'prefer-dark'}},
+    {id: 'nightlight', label: 'Night Light', defaults: {enabled: true}},
+    {id: 'wallpaper', label: 'Wallpaper', defaults: {file: ''}},
+    {id: 'wifi', label: 'Wi-Fi', defaults: {enabled: false}},
+    {id: 'bluetooth', label: 'Bluetooth', defaults: {enabled: false}},
+    {id: 'power', label: 'Power mode', defaults: {profile: 'performance'}},
+    {id: 'screen', label: 'Screen blank delay', defaults: {minutes: 0}},
+    {id: 'sleep', label: 'Automatic suspend', defaults: {minutes: 0}},
+    {id: 'system', label: 'Lock, suspend or power off', defaults: {power: 'lock', off: 'nothing'}, noRestore: true},
+];
+
+const STYLES = [
+    {id: 'prefer-dark', label: 'Dark'},
+    {id: 'default', label: 'Light'},
+];
+
+const PROFILES = [
+    {id: 'performance', label: 'Performance'},
+    {id: 'balanced', label: 'Balanced'},
+    {id: 'power-saver', label: 'Power saver'},
+];
+
+const DELAYS = [0, 1, 2, 5, 10, 15, 30, 60, 120].map(m => ({id: m, label: m ? `${m} min` : 'Never'}));
+
+const SYSTEM_ACTIONS = [
+    {id: 'lock', label: 'Lock screen'},
+    {id: 'suspend', label: 'Suspend'},
+    {id: 'logout', label: 'Log out'},
+    {id: 'reboot', label: 'Restart'},
+    {id: 'poweroff', label: 'Power off'},
 ];
 
 const OFF_CHOICES = [
@@ -26,16 +61,42 @@ const LAYOUTS = [
 ];
 
 function newAction(type) {
-    const action = {type, off: type === 'command' ? 'command' : 'restore', offCommand: ''};
-    if (type === 'display')
-        Object.assign(action, {connector: '', layout: 'extend'});
-    if (type === 'audio')
-        action.sink = '';
-    if (type === 'browser')
-        Object.assign(action, {urls: [], kiosk: false});
-    if (type === 'command')
-        action.command = '';
-    return action;
+    return {type: type.id, off: 'restore', offCommand: '', ...type.defaults};
+}
+
+function iconRow(icon, onChange) {
+    const row = new Adw.ActionRow({title: 'Icon'});
+    const preview = new Gtk.Image({icon_name: icon || DEFAULT_ICON});
+    const search = new Gtk.SearchEntry({placeholder_text: 'Search icons'});
+    const grid = new Gtk.FlowBox({selection_mode: Gtk.SelectionMode.NONE, min_children_per_line: 8, max_children_per_line: 8, homogeneous: true});
+    grid.set_filter_func(child => child.child.tooltip_text.includes(search.text.toLowerCase()));
+    search.connect('search-changed', () => grid.invalidate_filter());
+    const box = new Gtk.Box({orientation: Gtk.Orientation.VERTICAL, spacing: 6});
+    box.append(search);
+    box.append(new Gtk.ScrolledWindow({child: grid, hscrollbar_policy: Gtk.PolicyType.NEVER, min_content_height: 320, min_content_width: 380}));
+    const popover = new Gtk.Popover({child: box});
+    const button = new Gtk.MenuButton({child: preview, popover, valign: Gtk.Align.CENTER, tooltip_text: 'Pick icon'});
+    row.add_suffix(button);
+    row.activatable_widget = button;
+
+    // Filled on first open: the theme has hundreds of symbolic icons.
+    popover.connect('show', () => {
+        if (grid.get_first_child())
+            return;
+        const names = Gtk.IconTheme.get_for_display(Gdk.Display.get_default()).get_icon_names()
+            .filter(n => n.endsWith('-symbolic')).sort();
+        for (const name of names) {
+            const item = new Gtk.Button({icon_name: name, tooltip_text: name});
+            item.add_css_class('flat');
+            item.connect('clicked', () => {
+                preview.icon_name = name;
+                popover.popdown();
+                onChange(name);
+            });
+            grid.append(item);
+        }
+    });
+    return row;
 }
 
 function comboRow(title, items, selectedId, onChange) {
@@ -71,6 +132,9 @@ export default class ModesPreferences extends ExtensionPreferences {
             listSinks().catch(() => []),
             listMonitors().catch(() => []),
         ]);
+        this._apps = Gio.AppInfo.get_all().filter(a => a.should_show())
+            .map(a => ({id: a.get_id(), label: a.get_display_name()}))
+            .sort((a, b) => a.label.localeCompare(b.label));
 
         const page = new Adw.PreferencesPage();
         this._list = new Adw.PreferencesGroup({
@@ -120,14 +184,10 @@ export default class ModesPreferences extends ExtensionPreferences {
             navPage.title = text;
             this._save();
         }));
-        const iconPreview = new Gtk.Image({icon_name: mode.icon || DEFAULT_ICON});
-        const iconRow = entryRow('Icon name (e.g. video-display-symbolic)', mode.icon, text => {
-            mode.icon = text;
-            iconPreview.icon_name = text || DEFAULT_ICON;
+        general.add(iconRow(mode.icon, name => {
+            mode.icon = name;
             this._save();
-        });
-        iconRow.add_suffix(iconPreview);
-        general.add(iconRow);
+        }));
         page.add(general);
 
         const actionGroups = [];
@@ -164,7 +224,7 @@ export default class ModesPreferences extends ExtensionPreferences {
             page.add(deleteGroup);
         };
         addButton.connect('clicked', () => {
-            mode.actions.push(newAction(TYPES[typeDropdown.selected].id));
+            mode.actions.push(newAction(TYPES[typeDropdown.selected]));
             this._save();
             render();
         });
@@ -179,7 +239,8 @@ export default class ModesPreferences extends ExtensionPreferences {
             action[key] = value;
             this._save();
         };
-        const group = new Adw.PreferencesGroup({title: `${index + 1}. ${TYPES.find(t => t.id === action.type).label}`});
+        const type = TYPES.find(t => t.id === action.type);
+        const group = new Adw.PreferencesGroup({title: `${index + 1}. ${type.label}`});
 
         const buttons = new Gtk.Box({spacing: 6});
         const addButton = (icon, tooltip, sensitive, onClick) => {
@@ -209,11 +270,35 @@ export default class ModesPreferences extends ExtensionPreferences {
             const kiosk = new Adw.SwitchRow({title: 'Fullscreen (kiosk)', subtitle: 'Opens in Firefox with its own profile for this mode', active: action.kiosk});
             kiosk.connect('notify::active', () => set('kiosk', kiosk.active));
             group.add(kiosk);
-        } else {
+        } else if (action.type === 'command') {
             group.add(entryRow('Command', action.command, text => set('command', text)));
+        } else if (action.type === 'app') {
+            group.add(comboRow('App', this._apps, action.app, id => set('app', id)));
+        } else if (action.type === 'volume') {
+            const spin = Adw.SpinRow.new_with_range(0, 150, 5);
+            spin.title = 'Volume (%)';
+            spin.value = action.volume;
+            spin.connect('notify::value', () => set('volume', spin.value));
+            group.add(spin);
+        } else if (['dnd', 'nightlight', 'wifi', 'bluetooth'].includes(action.type)) {
+            const toggle = new Adw.SwitchRow({title: `Turn ${type.label} on`, subtitle: 'Off turns it off', active: action.enabled});
+            toggle.connect('notify::active', () => set('enabled', toggle.active));
+            group.add(toggle);
+        } else if (action.type === 'dark') {
+            group.add(comboRow('Style', STYLES, action.style, id => set('style', id)));
+        } else if (action.type === 'power') {
+            group.add(comboRow('Power mode', PROFILES, action.profile, id => set('profile', id)));
+        } else if (action.type === 'screen') {
+            group.add(comboRow('Blank screen after', DELAYS, action.minutes, id => set('minutes', id)));
+        } else if (action.type === 'sleep') {
+            group.add(comboRow('Suspend after', DELAYS, action.minutes, id => set('minutes', id)));
+        } else if (action.type === 'system') {
+            group.add(comboRow('Action', SYSTEM_ACTIONS, action.power, id => set('power', id)));
+        } else if (action.type === 'wallpaper') {
+            group.add(this._fileRow(action.file, file => set('file', file)));
         }
 
-        const choices = action.type === 'command' ? OFF_CHOICES.filter(c => c.id !== 'restore') : OFF_CHOICES;
+        const choices = type.noRestore ? OFF_CHOICES.filter(c => c.id !== 'restore') : OFF_CHOICES;
         const offCommand = entryRow('Command when turned off', action.offCommand, text => set('offCommand', text));
         offCommand.visible = action.off === 'command';
         group.add(comboRow('When turned off', choices, action.off, id => {
@@ -222,5 +307,28 @@ export default class ModesPreferences extends ExtensionPreferences {
         }));
         group.add(offCommand);
         return group;
+    }
+
+    _fileRow(file, onChange) {
+        const row = new Adw.ActionRow({title: 'Image', subtitle: file ? GLib.path_get_basename(file) : 'None'});
+        const button = new Gtk.Button({icon_name: 'document-open-symbolic', valign: Gtk.Align.CENTER, tooltip_text: 'Choose image'});
+        button.add_css_class('flat');
+        const filter = new Gtk.FileFilter({name: 'Images'});
+        filter.add_mime_type('image/*');
+        button.connect('clicked', () => {
+            new Gtk.FileDialog({default_filter: filter}).open(this._window, null, (dialog, result) => {
+                let picked;
+                try {
+                    picked = dialog.open_finish(result).get_path();
+                } catch {
+                    return; // cancelled
+                }
+                row.subtitle = GLib.path_get_basename(picked);
+                onChange(picked);
+            });
+        });
+        row.add_suffix(button);
+        row.activatable_widget = button;
+        return row;
     }
 }

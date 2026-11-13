@@ -11,9 +11,17 @@ A **Modes** toggle sits next to Wi-Fi/Bluetooth. Expand it to pick a mode. Start
 | Display | Adds a display to the current layout, or uses only that display | Puts the previous display layout back |
 | Audio output | Switches the default sound output | Switches back to the previous output |
 | Open websites | Opens the URLs in Firefox with a separate profile for this mode, optionally fullscreen (kiosk) | Closes that Firefox instance |
+| Volume | Sets the output volume | Puts the previous volume back |
+| Open app | Starts an installed app | - |
 | Run command | Runs a shell command | Runs another command, if set |
+| Do Not Disturb, Night Light, Wi-Fi, Bluetooth | Turns it on or off | Puts the previous state back |
+| Dark or light style | Switches the system style | Puts the previous style back |
+| Wallpaper | Sets a wallpaper image | Puts the previous wallpaper back |
+| Power mode | Performance, balanced or power saver | Puts the previous power mode back |
+| Screen blank delay, Automatic suspend | Changes when the screen blanks or the computer sleeps | Puts the previous timeouts back |
+| Lock, suspend or power off | Locks, suspends, logs out, restarts or powers off | - |
 
-Every action can instead run its own command when the mode turns off, or do nothing.
+Put lock and power actions last: anything after a restart or power off may not run. Every action can instead run its own command when the mode turns off, or do nothing.
 
 Example: a "Movie" mode could add a second display, switch the sound to it and open a streaming site fullscreen. Turning it off closes the browser, switches the sound back and restores the display layout.
 

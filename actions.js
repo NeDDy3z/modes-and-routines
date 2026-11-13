@@ -1,5 +1,6 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import GioUnix from 'gi://GioUnix';
 
 Gio._promisify(Gio.Subprocess.prototype, 'communicate_utf8_async');
 Gio._promisify(Gio.Subprocess.prototype, 'wait_check_async');
@@ -145,7 +146,95 @@ const command = {
     },
 };
 
-export const HANDLERS = {audio, display, browser, command};
+const app = {
+    async on(action) {
+        const info = GioUnix.DesktopAppInfo.new(action.app);
+        if (!info)
+            throw new Error(`App ${action.app} is not installed`);
+        info.launch([], null);
+        return null;
+    },
+};
+
+const volume = {
+    async on(action) {
+        const previous = (await run(['pactl', 'get-sink-volume', '@DEFAULT_SINK@'])).match(/(\d+)%/)[1];
+        await run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', `${action.volume}%`]);
+        return previous;
+    },
+    async restore(action, previous) {
+        await run(['pactl', 'set-sink-volume', '@DEFAULT_SINK@', `${previous}%`]);
+    },
+};
+
+const quote = text => GLib.Variant.new_string(text).print(false);
+
+// Snapshot is the same [schema, key, value] list with the old values, so restore just sets them back.
+async function setKeys(keys) {
+    const previous = [];
+    for (const [schema, key, value] of keys) {
+        previous.push([schema, key, await run(['gsettings', 'get', schema, key])]);
+        await run(['gsettings', 'set', schema, key, value]);
+    }
+    return previous;
+}
+
+const gsettings = keysFor => ({
+    on: action => setKeys(keysFor(action)),
+    restore: (action, previous) => setKeys(previous),
+});
+
+const POWER = 'org.gnome.settings-daemon.plugins.power';
+
+function dbusProperty(bus, name, path, iface, prop, type, valueOf) {
+    const call = (method, args) => Gio.DBus[bus].call(name, path, 'org.freedesktop.DBus.Properties', method,
+        args, null, Gio.DBusCallFlags.ALLOW_INTERACTIVE_AUTHORIZATION, -1, null);
+    const set = value => call('Set', new GLib.Variant('(ssv)', [iface, prop, new GLib.Variant(type, value)]));
+    return {
+        async on(action) {
+            const [previous] = (await call('Get', new GLib.Variant('(ss)', [iface, prop]))).recursiveUnpack();
+            await set(valueOf(action));
+            return previous;
+        },
+        restore: (action, previous) => set(previous),
+    };
+}
+
+const SYSTEM_COMMANDS = {
+    lock: ['gdbus', 'call', '--session', '--dest', 'org.gnome.ScreenSaver', '--object-path', '/org/gnome/ScreenSaver',
+        '--method', 'org.gnome.ScreenSaver.Lock'],
+    suspend: ['systemctl', 'suspend'],
+    logout: ['gnome-session-quit', '--logout', '--no-prompt'],
+    reboot: ['gnome-session-quit', '--reboot', '--no-prompt'],
+    poweroff: ['gnome-session-quit', '--power-off', '--no-prompt'],
+};
+
+const system = {
+    async on(action) {
+        await run(SYSTEM_COMMANDS[action.power]);
+        return null;
+    },
+};
+
+export const HANDLERS = {
+    audio, display, browser, command, app, volume, system,
+    dnd: gsettings(a => [['org.gnome.desktop.notifications', 'show-banners', `${!a.enabled}`]]),
+    nightlight: gsettings(a => [['org.gnome.settings-daemon.plugins.color', 'night-light-enabled', `${a.enabled}`]]),
+    dark: gsettings(a => [['org.gnome.desktop.interface', 'color-scheme', quote(a.style)]]),
+    wallpaper: gsettings(a => ['picture-uri', 'picture-uri-dark'].map(key =>
+        ['org.gnome.desktop.background', key, quote(GLib.filename_to_uri(a.file, null))])),
+    screen: gsettings(a => [['org.gnome.desktop.session', 'idle-delay', `${a.minutes * 60}`]]),
+    sleep: gsettings(a => ['ac', 'battery'].flatMap(source => [
+        [POWER, `sleep-inactive-${source}-type`, quote(a.minutes ? 'suspend' : 'nothing')],
+        [POWER, `sleep-inactive-${source}-timeout`, `${a.minutes * 60}`],
+    ])),
+    power: dbusProperty('system', 'org.freedesktop.UPower.PowerProfiles', '/org/freedesktop/UPower/PowerProfiles',
+        'org.freedesktop.UPower.PowerProfiles', 'ActiveProfile', 's', a => a.profile),
+    wifi: dbusProperty('system', 'org.freedesktop.NetworkManager', '/org/freedesktop/NetworkManager',
+        'org.freedesktop.NetworkManager', 'WirelessEnabled', 'b', a => a.enabled),
+    bluetooth: dbusProperty('session', 'org.gnome.SettingsDaemon.Rfkill', '/org/gnome/SettingsDaemon/Rfkill',
+        'org.gnome.SettingsDaemon.Rfkill', 'BluetoothAirplaneMode', 'b', a => !a.enabled),
+};
 
 export async function startMode(mode, handlers = HANDLERS) {
     const snapshots = [];
